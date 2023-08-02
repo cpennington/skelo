@@ -67,8 +67,7 @@ class Glicko2Model(RatingModel):
     updated = (rating.getRating(), rating.getRd(), rating.vol)
     return updated
 
-  @staticmethod
-  def compute_prob(r1, r2):
+  def compute_prob(self, r1, r2):
     """
     Return the probability of a player with rating r1 beating a player with rating r2.
 

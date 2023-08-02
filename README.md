@@ -428,8 +428,7 @@ class EloModel(RatingModel):
     exp = self.compute_prob(r1, r2)
     return r1 + self.k(r1) * (label - exp)
 
-  @staticmethod
-  def compute_prob(r1, r2):
+  def compute_prob(self, r1, r2):
     diff = (r2 - r1) / 400.0
     prob = 1.0 / (1 + 10**diff)
     return prob

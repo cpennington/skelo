@@ -86,7 +86,7 @@ def generate_game_outcomes(ratings, seed=1):
     index = 0
     for p1 in range(num_players):
       for p2 in range(p1 + 1, num_players):
-        prob = EloModel.compute_prob(ratings[p1, ts], ratings[p2, ts]) 
+        prob = EloModel().compute_prob(ratings[p1, ts], ratings[p2, ts]) 
         matches.append({
           'p1': p1,
           'p2': p2,

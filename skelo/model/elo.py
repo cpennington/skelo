@@ -61,8 +61,7 @@ class EloModel(RatingModel):
     exp = self.compute_prob(r1, r2)
     return r1 + self.k(r1) * (label - exp)
 
-  @staticmethod
-  def compute_prob(r1, r2):
+  def compute_prob(self, r1, r2):
     """
     Return the probability of a player with rating r1 beating a player with rating r2.
     """

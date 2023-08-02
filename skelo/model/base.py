@@ -210,8 +210,7 @@ class RatingModel(object):
     })
     return self
 
-  @staticmethod
-  def compute_prob(r1, r2):
+  def compute_prob(self, r1, r2):
     """
     Returns:
       float: the probability of a player with rating `r1` beating a player with rating `r2`.

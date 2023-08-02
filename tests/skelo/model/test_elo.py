@@ -161,8 +161,8 @@ class TestEloEstimator:
     for k, (_, g) in enumerate(games.iterrows()):
       r1_expected = estimator.rating_model.get(g['p1'], timestamp=g['match_at'])['rating']
       r2_expected = estimator.rating_model.get(g['p2'], timestamp=g['match_at'])['rating']
-      prob = EloModel.compute_prob(r1_expected, r2_expected)
-      assert transformed_prob.iloc[k] == EloModel.compute_prob(r1_expected, r2_expected)
+      prob = EloModel().compute_prob(r1_expected, r2_expected)
+      assert transformed_prob.iloc[k] == EloModel().compute_prob(r1_expected, r2_expected)
 
   def test_transform_ndarray(self):
     num_players = 2
@@ -183,7 +183,7 @@ class TestEloEstimator:
     for k, (_, g) in enumerate(games.iterrows()):
       r1_expected = estimator.rating_model.get(g['p1'], timestamp=g['match_at'])['rating']
       r2_expected = estimator.rating_model.get(g['p2'], timestamp=g['match_at'])['rating']
-      prob = EloModel.compute_prob(r1_expected, r2_expected)
+      prob = EloModel().compute_prob(r1_expected, r2_expected)
       assert transformed_prob[k] == prob
 
   def test_predict_proba_dataframe(self):
@@ -197,7 +197,7 @@ class TestEloEstimator:
     estimator = EloEstimator('p1', 'p2', 'match_at').fit(games, games['label'])
     y_pred = estimator.predict_proba(np.array([[1, 2, 2], [1, 2, 3], [2, 1, 3]]))
 
-    pr = EloModel.compute_prob(1510, 1490)
+    pr = EloModel().compute_prob(1510, 1490)
     assert np.allclose(y_pred, np.array([[0.5, 0.5], [pr, 1 - pr], [1 - pr, pr]]))
 
   def test_predict_proba_ndarray(self):
@@ -213,5 +213,5 @@ class TestEloEstimator:
     estimator = EloEstimator().fit(X, y)
     y_pred = estimator.predict_proba(np.array([[1, 2, 2], [1, 2, 3], [2, 1, 3]]))
 
-    pr = EloModel.compute_prob(1510, 1490)
+    pr = EloModel().compute_prob(1510, 1490)
     assert np.allclose(y_pred, np.array([[0.5, 0.5], [pr, 1 - pr], [1 - pr, pr]]))
