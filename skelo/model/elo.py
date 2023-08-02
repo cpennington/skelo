@@ -43,7 +43,7 @@ class EloModel(RatingModel):
   This model may be used directly, but is primarily intended as a utility class for an EloEstimator.
   """
 
-  def __init__(self, default_k=20, k_fn=None, initial_value=1500, initial_time=0, **kwargs):
+  def __init__(self, default_k=20, k_fn=None, initial_value=1500, initial_time=0, rating_factor=400.0, **kwargs):
     """
     Construct an Elo RatingsModel.
 
@@ -52,10 +52,13 @@ class EloModel(RatingModel):
       k_fn (callable): univariate function of a rating that returns a value of `k` for updates
       initial_value (int): initial default rating value to assign to a new player in the system
       initial_time (int or orderable): the earliest "time" value for matches between players.
+      rating_factor (float): The value used to convert Elo diff into win percentage. 400 (the default)
+        means a 400 pt difference means a 10-1 win proportion.
     """
     super().__init__(initial_value=float(initial_value), initial_time=initial_time)
     self.default_k = default_k
     self.k = k_fn or (lambda _: default_k)
+    self.rating_factor = rating_factor
 
   def evolve_rating(self, r1, r2, label):
     exp = self.compute_prob(r1, r2)
@@ -65,7 +68,7 @@ class EloModel(RatingModel):
     """
     Return the probability of a player with rating r1 beating a player with rating r2.
     """
-    diff = (r2 - r1) / 400.0
+    diff = (r2 - r1) / self.rating_factor
     prob = 1.0 / (1 + 10**diff)
     return prob
 
@@ -82,7 +85,7 @@ class EloEstimator(RatingEstimator):
     'initial_time',
   ]
 
-  def __init__(self, key1_field=None, key2_field=None, timestamp_field=None, default_k=20, k_fn=None, initial_value=1500, initial_time=0, **kwargs):
+  def __init__(self, key1_field=None, key2_field=None, timestamp_field=None, default_k=20, k_fn=None, initial_value=1500, initial_time=0, rating_factor=400.0, **kwargs):
     """
     Construct a classifier object, without fitting it.
     
@@ -101,3 +104,4 @@ class EloEstimator(RatingEstimator):
     )
     self.default_k = default_k
     self.k_fn = k_fn
+    self.rating_factor = rating_factor
