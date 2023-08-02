@@ -20,6 +20,7 @@
 
 import bisect
 import logging
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -42,7 +43,11 @@ class RatingModel(object):
   def __init__(self, initial_value, initial_time):
     self.initial_value = initial_value
     self.initial_time = initial_time
-    self.ratings = {}
+    self.ratings = defaultdict(lambda: [{
+      'rating': self.initial_value,
+      'valid_from': self.initial_time,
+      'valid_to': None,
+    }])
 
   @property
   def keys(self):
@@ -148,7 +153,7 @@ class RatingModel(object):
     Raises:
       KeyError: if key is not yet added to the system with `add()`
     """
-    ratings = self.ratings.get(key)
+    ratings = self.ratings[key]
     if ratings is None:
       raise KeyError(f"key: {key} is not yet stored in the model.")
 
