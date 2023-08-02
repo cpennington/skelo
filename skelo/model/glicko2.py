@@ -74,12 +74,9 @@ class Glicko2Model(RatingModel):
 
     For more background, please see the `Glicko Paper <http://glicko.net/glicko/glicko.pdf>`_
     """
-    r_diff = (r2[0] - r1[0]) / 400.0
-    root_square_std = np.sqrt(r1[1]**2 + r2[1]**2)
-    g = glicko2.Player(*r1)._g(r1[1])
-    arg = g * root_square_std * r_diff
-    prob = 1.0 / (1 + 10**arg)
-    return prob
+    p1 = glicko2.Player(*r1)
+    p2 = glicko2.Player(*r2)
+    return p1.win_prob(p2)
 
 
 class Glicko2Estimator(RatingEstimator):
