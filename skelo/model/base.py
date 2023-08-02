@@ -466,7 +466,7 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
     self._fit = True
     return self
 
-  def transform(self, X, output_type='prob', strict_past_data=True):
+  def transform(self, X, strict_past_data=True):
     """
     Transform the player identifier matrix into either the player ratings or the estimated
     probability of player 1 defeating player 2.
@@ -491,9 +491,6 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
     Returns:
       An ndarry or pandas Series of transformed ratings or probabilities.
     """
-    allowed_output_types = ['prob', 'rating']
-    if output_type not in allowed_output_types:
-      raise ValueError(f"output_type must be one of: {allowed_output_types}")
     if not self._fit:
       raise ValueError(".fit() has not been called on this model.")
 
@@ -508,27 +505,21 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
         x = X.iloc[:, :3].values
     else:
       x = X
-    if output_type == 'prob':
-      transformed = np.array(
-        self.rating_model.predict_proba(x[:, 0], x[:, 1], x[:, 2], strict_past_data=strict_past_data)
-      )
-    else:
-      transformed = np.array(
-        self.rating_model.transform(x[:, 0], x[:, 1], x[:, 2], strict_past_data=strict_past_data)
-      )
+    prob = np.array(
+      self.rating_model.predict_proba(x[:, 0], x[:, 1], x[:, 2], strict_past_data=strict_past_data)
+    )
+    ratings = np.array(
+      self.rating_model.transform(x[:, 0], x[:, 1], x[:, 2], strict_past_data=strict_past_data)
+    )
+    results = np.column_stack([prob, ratings.reshape((len(prob), -1))])
 
-    if dtype is pd.DataFrame and output_type == 'prob':
-      return pd.Series(
-        index=X.index,
-        data=transformed,
-      )
-    if dtype is pd.DataFrame and output_type == 'rating':
+    if dtype is pd.DataFrame:
       return pd.DataFrame(
         index=X.index,
-        columns=['r1', 'r2'],
-        data=transformed,
+        data=results,
+        columns=['prob'] + self.rating_model.transform_headers
       )
-    return transformed
+    return results
 
   def predict_proba(self, X):
     """

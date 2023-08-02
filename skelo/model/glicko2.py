@@ -44,6 +44,7 @@ class Glicko2Model(RatingModel):
 
   This model may be used directly, but is primarily intended as a utility class for an Glicko2Estimator.
   """
+  transform_headers = ['r1', 'rd1', 'v1', 'r2', 'rd2', 'v2']
 
   def __init__(self, initial_value=(1500., 350., 0.06), initial_time=0, **kwargs):
     """

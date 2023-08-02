@@ -42,6 +42,7 @@ class EloModel(RatingModel):
 
   This model may be used directly, but is primarily intended as a utility class for an EloEstimator.
   """
+  transform_headers = ['r1', 'r2']
 
   def __init__(self, default_k=20, k_fn=None, initial_value=1500, initial_time=0, rating_factor=400.0, **kwargs):
     """
