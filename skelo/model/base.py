@@ -224,7 +224,12 @@ class RatingModel(ABC, Generic[R, T]):
             idx = min(len(ratings), max(0, idx_unbounded))
         return ratings[idx]
 
-    def update(self, winners: Iterable[str], losers: Iterable[str], period_end: T):
+    def update(
+        self,
+        winners: Iterable[str],
+        losers: Iterable[str],
+        period_end: T,
+    ):
         """
         Update the ratings for all the supplied matches in a given rating period
         starting at the `period_end` by performing the following operations:
@@ -474,7 +479,7 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
         timestamp_field=None,
         initial_value=None,
         initial_time=0,
-        rating_period=None,
+        rating_period_field=None,
         incremental_fit=False,
         initial_ratings=None,
         **kwargs,
@@ -500,13 +505,13 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
         self.initial_value = initial_value
         self.initial_time = initial_time
         self.rating_model = None
-        self.rating_period = rating_period
         self.incremental_fit = incremental_fit
         self.initial_ratings = initial_ratings
 
         self.key1_field = key1_field
         self.key2_field = key2_field
         self.timestamp_field = timestamp_field
+        self.rating_period_field = rating_period_field
         if any([key1_field, key2_field, timestamp_field]):
             if not all([key1_field, key2_field, timestamp_field]):
                 raise ValueError(
@@ -581,13 +586,13 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
         x.sort_values([ts, key1, key2], inplace=True)
         x["winner"] = x.apply(lambda r: r[key1] if r.result else r[key2], axis=1)
         x["loser"] = x.apply(lambda r: r[key2] if r.result else r[key1], axis=1)
-        if self.rating_period:
-            periods = x.resample(self.rating_period, label="right", on=ts)
+        if self.rating_period_field:
+            periods = x.groupby(self.rating_period_field)
             report_interval = len(periods) / 10
             intervals_complete = 1
             taken = 0
-            for period_end, period in periods:
-                self.rating_model.update(period.winner, period.loser, period_end)
+            for _, period in sorted(periods):
+                self.rating_model.update(period.winner, period.loser, period[ts].max())
                 taken += 1
                 if taken >= report_interval:
                     logger.debug(f"Completed {intervals_complete}/10 fit intervals")
