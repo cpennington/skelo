@@ -25,16 +25,17 @@ import logging
 import numpy as np
 import pandas as pd
 import glicko2
+from typing import Tuple, Generic
 
 from sklearn.base import BaseEstimator, ClassifierMixin
 
-from skelo.model.base import RatingModel, RatingEstimator
+from skelo.model.base import RatingModel, RatingEstimator, T
 
 
 logger = logging.getLogger(__name__)
 
 
-class Glicko2Model(RatingModel):
+class Glicko2Model(Generic[T], RatingModel[Tuple[float, float, float], T]):
   """
   Dictionary-based implementation of the `Glicko2 rating system <https://en.wikipedia.org/wiki/Glicko_rating_system>`_.
 
@@ -44,7 +45,7 @@ class Glicko2Model(RatingModel):
 
   This model may be used directly, but is primarily intended as a utility class for an Glicko2Estimator.
   """
-  transform_headers = ['r1', 'rd1', 'v1', 'r2', 'rd2', 'v2']
+  transform_headers = ['r', 'rd', 'v']
 
   def __init__(self, initial_value=(1500., 350., 0.06), initial_time=0, **kwargs):
     """
@@ -54,20 +55,27 @@ class Glicko2Model(RatingModel):
       initial_value (float, float, float): initial default rating and deviation assigned to a new player
       initial_time (int or orderable): the earliest "time" value for matches between players.
     """
-    super().__init__(initial_value=initial_value, initial_time=initial_time)
+    super().__init__(initial_value=initial_value, initial_time=initial_time, **kwargs)
 
-  def evolve_rating(self, r1, r2, label):
+  def get(self, key, timestamp=None, strict_past_data=True):
+    current = super().get(key, timestamp, strict_past_data)
+    player = glicko2.Player(*current['rating'])
+    for _ in range(current['trailing_empty_periods']):
+      player.did_not_compete()
+    return {**current, 'rating': (player.getRating(), player.getRd(), player.vol)}
+
+  def evolve_rating(self, player, matches):
     """
     Update a Glicko rating based on the outcome of a match.
     
     This is based on the example in the glicko2 package's unit tests,
     available `here <https://github.com/deepy/glicko2/blob/master/tests/tests.py>`_
     """
-    rating = glicko2.Player(*r1)
-    rating.update_player([r2[0]], [r2[1]], [label])
-    updated = (rating.getRating(), rating.getRd(), rating.vol)
-    return updated
-
+    player = glicko2.Player(*self.get(player)['rating'])
+    rs, rds, vs, results = zip(*[[*self.get(opp)['rating'], result] for opp, result in matches])
+    player.update_player(list(rs), list(rds), list(results))
+    return (player.getRating(), player.getRd(), player.vol)
+    
   def compute_prob(self, r1, r2):
     """
     Return the probability of a player with rating r1 beating a player with rating r2.
@@ -88,6 +96,8 @@ class Glicko2Estimator(RatingEstimator):
   RATING_MODEL_ATTRIBUTES = [
     'initial_value',
     'initial_time',
+    'rating_period',
+    'initial_ratings',
   ]
 
   def __init__(self,
@@ -96,6 +106,9 @@ class Glicko2Estimator(RatingEstimator):
     timestamp_field=None,
     initial_value=(1500., 350., 0.06),
     initial_time=0,
+    rating_period=None,
+    incremental_fit=False,
+    initial_ratings=None,
     **kwargs
   ):
     """
@@ -112,5 +125,8 @@ class Glicko2Estimator(RatingEstimator):
       timestamp_field=timestamp_field,
       initial_value=initial_value,
       initial_time=initial_time,
+      rating_period=rating_period,
+      incremental_fit=incremental_fit,
+      initial_ratings=initial_ratings,
       **kwargs
     )

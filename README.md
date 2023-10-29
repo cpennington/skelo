@@ -413,11 +413,14 @@ The available models extend the `skelo.model.RatingEstimator` [class](https://gi
 
 To create a new classifier, it's necessary to:
   - Extend the `RatingModel` to implement the rating update formulas through the methods:
-    - `evolve_rating(r1, r2, label)`, which computes a new rating given the players' previous ratings, `r1` and `r2`, prior to a match with outcome `label`
+    - `evolve_rating(player, matches)`, which computes a new rating for `player`, given all `matches` (as `(winner, loser)` pairs), in the presence of all existing ratings
     - `compute_prob(r1, r2)`, which computes the probability of victory of a player with rating `r1` over a player with rating `r2`
+    - specify `transform_headers`, which is a list of the names of the columns in the rating for a player when flattened
 
 ```python
 class EloModel(RatingModel):
+  transform_headers = ['r']
+  
   def __init__(self, default_k=20, k_fn=None, initial_value=1500, initial_time=0, **kwargs):
     super().__init__(initial_value=float(initial_value), initial_time=initial_time)
     # Set all hyperparameters as explicit attributes, such that sklearn's CV utilities work

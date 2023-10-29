@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 import logging
+from typing import Generic, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -29,10 +30,12 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 
 from skelo.model.base import RatingModel, RatingEstimator
 
+from .base import T
+
 logger = logging.getLogger(__name__)
 
 
-class EloModel(RatingModel):
+class EloModel(Generic[T], RatingModel[float, T]):
   """
   Dictionary-based implementation of the `Elo rating system <https://en.wikipedia.org/wiki/Elo_rating_system>`_.
 
@@ -42,7 +45,7 @@ class EloModel(RatingModel):
 
   This model may be used directly, but is primarily intended as a utility class for an EloEstimator.
   """
-  transform_headers = ['r1', 'r2']
+  transform_headers = ['r']
 
   def __init__(self, default_k=20, k_fn=None, initial_value=1500, initial_time=0, rating_factor=400.0, **kwargs):
     """
@@ -56,15 +59,20 @@ class EloModel(RatingModel):
       rating_factor (float): The value used to convert Elo diff into win percentage. 400 (the default)
         means a 400 pt difference means a 10-1 win proportion.
     """
-    super().__init__(initial_value=float(initial_value), initial_time=initial_time)
+    super().__init__(initial_value=float(initial_value), initial_time=initial_time, **kwargs)
     self.default_k = default_k
     self.k = k_fn or (lambda _: default_k)
     self.rating_factor = rating_factor
 
-  def evolve_rating(self, r1, r2, label):
-    exp = self.compute_prob(r1, r2)
-    return r1 + self.k(r1) * (label - exp)
-
+  def evolve_rating(self, player, matches):
+    current = self.get(player)['rating']
+    update = 0
+    for (opponent, result) in matches:
+      opp_rating = self.get(opponent)['rating']
+      exp = self.compute_prob(current, opp_rating)
+      update += self.k(current) * (result - exp)
+    return current + update
+  
   def compute_prob(self, r1, r2):
     """
     Return the probability of a player with rating r1 beating a player with rating r2.
@@ -84,9 +92,24 @@ class EloEstimator(RatingEstimator):
     'k_fn',
     'initial_value',
     'initial_time',
+    'rating_period',
+    'initial_ratings',
   ]
 
-  def __init__(self, key1_field=None, key2_field=None, timestamp_field=None, default_k=20, k_fn=None, initial_value=1500, initial_time=0, rating_factor=400.0, **kwargs):
+  def __init__(
+      self,
+      key1_field=None,
+      key2_field=None,
+      timestamp_field=None,
+      default_k=20,
+      k_fn=None,
+      initial_value=1500,
+      initial_time=0,
+      rating_factor=400.0,
+      incremental_fit=False,
+      initial_ratings=None,
+      **kwargs
+    ):
     """
     Construct a classifier object, without fitting it.
     
@@ -101,6 +124,8 @@ class EloEstimator(RatingEstimator):
       timestamp_field=timestamp_field,
       initial_value=initial_value,
       initial_time=initial_time,
+      incremental_fit=incremental_fit,
+      initial_ratings=initial_ratings,
       **kwargs
     )
     self.default_k = default_k

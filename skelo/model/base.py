@@ -21,6 +21,31 @@
 import bisect
 import logging
 from collections import defaultdict
+from abc import ABC, abstractmethod
+from typing import (
+  TypeVar,
+  Generic,
+  List,
+  Tuple,
+  Iterable,
+  Literal,
+  DefaultDict,
+  Mapping,
+  cast,
+  TYPE_CHECKING,
+  Any
+)
+from typing_extensions import (
+  TypedDict,
+)
+
+if TYPE_CHECKING:
+  from _typeshed import SupportsRichComparison    
+  T = TypeVar("T", bound=SupportsRichComparison)
+else:
+  T = TypeVar("T")
+
+R = TypeVar("R")
 
 import numpy as np
 import pandas as pd
@@ -29,8 +54,15 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 
 logger = logging.getLogger(__name__)
 
+class Rating(TypedDict, Generic[R, T]):
+  rating: R
+  valid_from: T
+  valid_to: T | None
+  trailing_empty_periods: int
 
-class RatingModel(object):
+RatingDict = Mapping[str, List[Rating[R, T]]]
+
+class RatingModel(ABC, Generic[R, T]):
   """
   Base class defining a ratings system based on the ratings update formula, and also
   to storing the timeseries of player ratings as match outcomes are added to the system.
@@ -40,17 +72,22 @@ class RatingModel(object):
   within the `sklean`-compatible estimator classes available to users.
   """
 
-  def __init__(self, initial_value, initial_time):
+  def __init__(self, initial_value, initial_time, rating_period: pd.DateOffset | str | None = None, initial_ratings: RatingDict | None = None):
     self.initial_value = initial_value
     self.initial_time = initial_time
-    self.ratings = defaultdict(lambda: [{
-      'rating': self.initial_value,
-      'valid_from': self.initial_time,
-      'valid_to': None,
-    }])
+    self.rating_period = rating_period
+    self.ratings: DefaultDict[str, List[Rating[R, T]]] = defaultdict(
+      lambda: [
+          {'rating': self.initial_value, 'valid_from': self.initial_time, 'valid_to': None, 'trailing_empty_periods': 0}
+      ], initial_ratings or {}
+    )
 
+  @abstractmethod
+  def evolve_rating(self, player: str, matches: List[Tuple[str, Literal[0, 1]]]) -> R:
+    raise NotImplementedError
+  
   @property
-  def keys(self):
+  def keys(self) -> Iterable[str]:
     """
     The current keys (player identifiers) for all players in the system, which may
     be any hashable object.
@@ -89,10 +126,11 @@ class RatingModel(object):
       'rating': value or self.initial_value,
       'valid_from': self.initial_time,
       'valid_to': None,
+      'trailing_empty_periods': 0,
     }]
     return self
 
-  def get(self, key, timestamp=None, strict_past_data=True):
+  def get(self, key: str, timestamp: T | None = None, strict_past_data: bool = True) -> Rating[R, T]:
     """
     Retrieve a player rating payload for the specified system `timestamp`.
     The `timestamp` will be used to retrieve the dictionary of rating data
@@ -166,20 +204,20 @@ class RatingModel(object):
       idx = min(len(ratings), max(0, idx_unbounded))
     return ratings[idx]
 
-  def update(self, winner, loser, timestamp):
+  def update(self, winners: Iterable[str], losers: Iterable[str], period_end: T):
     """
-    Update the ratings for the given players for a match at the provided `timestamp`
-    by performing the following operations:
+    Update the ratings for all the supplied matches in a given rating period
+    starting at the `period_end` by performing the following operations:
 
-    - set both players' latest ratings' `valid_to` field to `timestamp`
+    - set all players' latest ratings' `valid_to` field to `period_end`
     - calculate the new ratings and append these to players' timeseries with
-      `valid_from` set to `timestamp`
+      `valid_from` set to `period_end`
 
     Args:
-      winner: identifier for the player who won
-      loser: identifier for the player who lost
-      timestamp: system time at which the match occurred. While we say "timestamp" this does not
-        imply any requirement that the type be a `datetime.datetim` or similar. Any orderable type
+      winners: identifier for the player who won each match
+      losers: identifier for the player who lost each match
+      period_end: system time at which the rating period ended.
+        This does not need to be a `datetime.datetime` or similar. Any orderable type
         is suitable.
 
     Returns:
@@ -189,33 +227,51 @@ class RatingModel(object):
       KeyError: if winner or loser is not yet added to the system
       ValueError: if winner or loser is updated retroactively
     """
-    r1 = self.get(winner)
-    r2 = self.get(loser)
-    if timestamp < r1['valid_from']:
-      raise ValueError(
-        f"Attempted to retrospectively update a rating for {winner} at timestamp '{timestamp}' "
-        f"which is earlier than the latest available rating at timestamp '{r1['valid_from']}'"
-      )
-    if timestamp < r2['valid_from']:
-      raise ValueError(
-        f"Attempted to retrospectively update a rating for {loser} at timestamp '{timestamp}' "
-        f"which is earlier than the latest available rating at timestamp '{r2['valid_from']}'"
-      )
-    r1['valid_to'] = timestamp
-    r2['valid_to'] = timestamp
-    self.ratings[winner].append({
-      'valid_from': timestamp,
-      'valid_to': None,
-      'rating': self.evolve_rating(r1['rating'], r2['rating'], label=1),
-    })
-    self.ratings[loser].append({
-      'valid_from': timestamp,
-      'valid_to': None,
-      'rating': self.evolve_rating(r2['rating'], r1['rating'], label=0),
-    })
+    players = set(winners) | set(losers) 
+    new_ratings = {}
+    for player in players:
+      rating = self.get(player)
+      if period_end < rating['valid_from']:
+        raise ValueError(
+          f"Attempted to retrospectively update a rating for {player} at timestamp '{period_end}' "
+          f"which is earlier than the latest available rating at timestamp '{rating['valid_from']}'"
+        )
+      rating['valid_to'] = period_end
+
+      player_matches = [
+        (
+          loser if winner == player else winner,
+          1 if winner == player else 0
+        )
+        for (winner, loser)
+        in zip(winners, losers)
+        if player in [winner, loser]
+      ]
+
+      new_ratings[player] = {
+        'rating': self.evolve_rating(player, player_matches),
+        'valid_from': period_end,
+        'valid_to': None,
+        'trailing_empty_periods': 0,
+      }
+    if self.rating_period:
+      for player in self.ratings.keys() - players:
+          rating = self.get(player)
+          if period_end < rating['valid_from']:
+            raise ValueError(
+              f"Attempted to retrospectively update a rating for {player} at timestamp '{period_end}' "
+              f"which is earlier than the latest available rating at timestamp '{rating['valid_from']}'"
+            )
+          if rating['valid_to'] is None:
+            rating['valid_to'] = period_end
+          rating['trailing_empty_periods'] += 1
+
+    for player, rating in new_ratings.items():
+      self.ratings[player].append(rating)
     return self
 
-  def compute_prob(self, r1, r2):
+  @abstractmethod
+  def compute_prob(self, r1: R, r2: R) -> float:
     """
     Returns:
       float: the probability of a player with rating `r1` beating a player with rating `r2`.
@@ -264,17 +320,26 @@ class RatingModel(object):
         tuples = zip(key1, key2, timestamp)
 
     probs = []
+    report_interval = len(key1) / 10
+    intervals_complete = 1
+    taken = 0
     for (p1, p2, ts) in tuples:
       # Get the ratings for p1, p2 at the specified match time, `ts`.
-      r1 = self.get(p1, ts, strict_past_data=strict_past_data).get('rating', np.nan)
-      r2 = self.get(p2, ts, strict_past_data=strict_past_data).get('rating', np.nan)
+      r1 = self.get(p1, ts, strict_past_data=strict_past_data)['rating'] or np.nan
+      r2 = self.get(p2, ts, strict_past_data=strict_past_data)['rating'] or np.nan
       pr = self.compute_prob(r1, r2)
       probs.append(pr)
+      taken += 1
+      if (taken >= report_interval):
+        logger.debug(f"Completed {intervals_complete}/10 predict_proba intervals")
+        taken = 0
+        intervals_complete += 1
+
     if is_scalar:
       probs = probs[0]
     return probs
 
-  def transform(self, key1, key2, timestamp=None, strict_past_data=True):
+  def transform(self, key1, key2, timestamp: List[T] | T | None = None, strict_past_data=True):
     """
     Transform the player key pairs into their respective ratings at the
     given timestamp. If no timestamp is provided, then the latest ratings
@@ -300,11 +365,19 @@ class RatingModel(object):
       key2 = [key2]
       timestamp = [timestamp]
     ratings = []
+    report_interval = len(key1) / 10
+    intervals_complete = 1
+    taken = 0
     for (p1, p2, ts) in zip(key1, key2, timestamp):
       # Get the ratings for p1, p2 at the given match_at time
-      r1 = self.get(p1, ts, strict_past_data=strict_past_data).get('rating', np.nan)
-      r2 = self.get(p2, ts, strict_past_data=strict_past_data).get('rating', np.nan)
+      r1 = self.get(p1, ts, strict_past_data=strict_past_data)['rating'] or np.nan
+      r2 = self.get(p2, ts, strict_past_data=strict_past_data)['rating'] or np.nan
       ratings.append((r1, r2))
+      taken += 1
+      if (taken >= report_interval):
+        logger.debug(f"Completed {intervals_complete}/10 transform intervals")
+        taken = 0
+        intervals_complete += 1
     if is_scalar:
       ratings = ratings[0]
     return ratings
@@ -366,9 +439,11 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
   RATING_MODEL_ATTRIBUTES = [
     'initial_time',
     'initial_value',
+    'rating_period',
+    "initial_ratings",
   ]
 
-  def __init__(self, key1_field=None, key2_field=None, timestamp_field=None, initial_value=None, initial_time=0, **kwargs):
+  def __init__(self, key1_field=None, key2_field=None, timestamp_field=None, initial_value=None, initial_time=0, rating_period=None, incremental_fit=False, initial_ratings=None, **kwargs):
     """
     Construct a rating classifier, without fitting it.
 
@@ -379,12 +454,20 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
       initial_value: initial rating value to assign a new player. The type of `initial_value`
         depends on the underlying `RatingModel` of the `RatingEstimator`
       initial_time: earliest possible time in the rating system (treat this like `-np.inf`)
+      rating_period: A string or DateOffset specifying how long between ratings updates
+      incremental_fit (bool): if `False`, subsequent calls to fit refit the model and discard old ratings.
+        If `True`, the model's ratings may be incrementally updated with (net new) training data.
+        When fitting incrementally, ensure that new match data for any player are monotonically
+        increasing in time.
       **kwargs: keyword arguments to pass to the parent `BaseEstimator`
     """
     super().__init__(**kwargs)
     self.initial_value = initial_value
     self.initial_time = initial_time
     self.rating_model = None
+    self.rating_period = rating_period
+    self.incremental_fit = incremental_fit
+    self.initial_ratings = initial_ratings
 
     self.key1_field = key1_field
     self.key2_field = key2_field
@@ -397,36 +480,40 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
     self._can_transform_dataframe = (key1_field is not None)
     self._fit = False
 
-  def fit(self, X, y, incremental_fit=False):
+  def fit(self, X, y):
     """
     Fit the classifier by computing the ratings for each player given the match data.
 
     Args:
       X (ndarray or DataFrame): design matrix of matches with key1, key2, timestamp data
       y (ndarray or DataFrame): vector of match outcomes, where 1 denotes player key1 won
-      incremental_fit (bool): if `False`, subsequent calls to fit refit the model and discard old ratings.
-        If `True`, the model's ratings may be incrementally updated with (net new) training data.
-        When fitting incrementally, ensure that new match data for any player are monotonically
-        increasing in time.
     Returns:
       EloEstimator: self
     """
+    logger.info(f"Starting {self.__class__.__name__}.fit")
+    x: pd.DataFrame
+
+    key1 = self.key1_field or 'p1'
+    key2 = self.key2_field or 'p2'
+    ts = self.timestamp_field or 'ts'
+
     if type(X) is pd.DataFrame:
       if self._can_transform_dataframe:
-        x = X[[self.key1_field, self.key2_field, self.timestamp_field]].values
+        x = X[[self.key1_field, self.key2_field, self.timestamp_field]].copy()
       else:
         logger.warning(
           f"Attempting to transform a dataframe without attributes [key1_field, key2_field, timestamp_field]; using columns [0, 1, 2]"
         )
-        x = X.iloc[:, :3].values
+        x = X.iloc[:, :3]
     else:
-      x = X
-    if type(y) is pd.DataFrame:
-      y = y.iloc[:, 0].values
-    else:
-      y = y
+      x = pd.DataFrame(X, columns=[key1, key2, ts])
 
-    min_time = np.min(x[:, -1])
+    if type(y) is pd.DataFrame:
+      x['result'] = y.iloc[:, 0]
+    else:
+      x['result'] = y
+
+    min_time = x[ts].min()
     time_dtype = type(min_time)
     initial_time = None
     attempt_init_times = [-np.inf, 0, min_time]
@@ -441,29 +528,52 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
         "Please verify the dtype of the column."
       )
 
-    if not self._fit or not incremental_fit:
+    if not self._fit or not self.incremental_fit:
       # Create a new underlying ratings model if fit() has not been called,
       # or fit() is called with incremental_fit=False.
-      self.rating_model = self.RATING_MODEL_CLS(**{
+      parameters = {
         attr: getattr(self, attr)
         for attr in self.RATING_MODEL_ATTRIBUTES
-      })
+      }
+      self.rating_model = self.RATING_MODEL_CLS(**parameters)
 
-    # Update the keyset. If fit(..., incremental_fit=True) is called, this operation
+    # Update the keyset. If fit(...) is called when incremantal_fit is True, this operation
     # may add nonexistent keys but will not affect any existing data in the system.
-    keys = set(x[:, 0])
-    keys.update(set(x[:, 1]))
+    keys = set(x[key1])
+    keys.update(set(x[key2]))
     self.rating_model.build(keys)
 
     # Add new match observations into the rating system
-    sort_key = lambda r: (r[0][-1], r[0][0], r[0][1])
-    for (_x, _y) in sorted(zip(x, y), key=sort_key):
-      winner = _x[0] if _y else _x[1]
-      loser = _x[1] if _y else _x[0]
-      timestamp = _x[-1]
-      self.rating_model.update(winner, loser, timestamp)
+    x.sort_values([ts, key1, key2], inplace=True)
+    x['winner'] = x.apply(lambda r: r[key1] if r.result else r[key2], axis=1)
+    x['loser'] = x.apply(lambda r: r[key2] if r.result else r[key1], axis=1)
+    if self.rating_period:
+      periods = x.resample(self.rating_period, label="right", on=ts)
+      report_interval = len(periods) / 10
+      intervals_complete = 1
+      taken = 0
+      for period_end, period in periods:
+        self.rating_model.update(period.winner, period.loser, period_end)
+        taken += 1
+        if (taken >= report_interval):
+          logger.debug(f"Completed {intervals_complete}/10 fit intervals")
+          taken = 0
+          intervals_complete += 1
+    else:
+      report_interval = len(periods) / 10
+      intervals_complete = 1
+      taken = 0
+      def update_row(row):
+        self.rating_model.update([row.winner], [row.loser], row[ts])
+        taken += 1
+        if (taken >= report_interval):
+          logger.debug(f"Completed {intervals_complete}/10 fit intervals")
+          taken = 0
+          intervals_complete += 1
+      x.apply(update_row, axis=1)
 
     self._fit = True
+    logger.info(f"Ending {self.__class__.__name__}.fit")
     return self
 
   def transform(self, X, strict_past_data=True):
@@ -491,6 +601,7 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
     Returns:
       An ndarry or pandas Series of transformed ratings or probabilities.
     """
+    logger.info(f"Starting {self.__class__.__name__}.transform")
     if not self._fit:
       raise ValueError(".fit() has not been called on this model.")
 
@@ -505,19 +616,26 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
         x = X.iloc[:, :3].values
     else:
       x = X
+
+    logger.info(f"Computing probabilities in {self.__class__.__name__}.transform")
     prob = np.array(
       self.rating_model.predict_proba(x[:, 0], x[:, 1], x[:, 2], strict_past_data=strict_past_data)
     )
+    
+    logger.info(f"Computing ratings in {self.__class__.__name__}.transform")
     ratings = np.array(
       self.rating_model.transform(x[:, 0], x[:, 1], x[:, 2], strict_past_data=strict_past_data)
     )
+    
+    logger.info(f"Restacking columns in {self.__class__.__name__}.transform")
     results = np.column_stack([prob, ratings.reshape((len(prob), -1))])
 
+    logger.info(f"Ending {self.__class__.__name__}.transform")
     if dtype is pd.DataFrame:
       return pd.DataFrame(
         index=X.index,
         data=results,
-        columns=['prob'] + self.rating_model.transform_headers
+        columns=['prob'] + [f'{header}1' for header in self.rating_model.transform_headers] + [f'{header}2' for header in self.rating_model.transform_headers]
       )
     return results
 
