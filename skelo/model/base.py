@@ -80,12 +80,10 @@ class RatingModel(ABC, Generic[R, T]):
         self,
         initial_value,
         initial_time,
-        rating_period: pd.DateOffset | str | None = None,
         initial_ratings: RatingDict | None = None,
     ):
         self.initial_value = initial_value
         self.initial_time = initial_time
-        self.rating_period = rating_period
         self.ratings: DefaultDict[str, List[Rating[R, T]]] = defaultdict(
             lambda: [
                 {
@@ -229,6 +227,7 @@ class RatingModel(ABC, Generic[R, T]):
         winners: Iterable[str],
         losers: Iterable[str],
         period_end: T,
+        rating_period: bool = False,
     ):
         """
         Update the ratings for all the supplied matches in a given rating period
@@ -275,7 +274,7 @@ class RatingModel(ABC, Generic[R, T]):
                 "valid_to": None,
                 "trailing_empty_periods": 0,
             }
-        if self.rating_period:
+        if rating_period:
             for player in self.ratings.keys() - players:
                 rating = self.get(player)
                 if period_end < rating["valid_from"]:
@@ -468,7 +467,6 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
     RATING_MODEL_ATTRIBUTES = [
         "initial_time",
         "initial_value",
-        "rating_period",
         "initial_ratings",
     ]
 
@@ -478,7 +476,7 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
         key2_field=None,
         timestamp_field=None,
         initial_value=None,
-        initial_time=0,
+        initial_time=None,
         rating_period_field=None,
         incremental_fit=False,
         initial_ratings=None,
@@ -494,13 +492,14 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
           initial_value: initial rating value to assign a new player. The type of `initial_value`
             depends on the underlying `RatingModel` of the `RatingEstimator`
           initial_time: earliest possible time in the rating system (treat this like `-np.inf`)
-          rating_period: A string or DateOffset specifying how long between ratings updates
+          rating_period_field: The name of the field indicating which rating period a game takes place in
           incremental_fit (bool): if `False`, subsequent calls to fit refit the model and discard old ratings.
             If `True`, the model's ratings may be incrementally updated with (net new) training data.
             When fitting incrementally, ensure that new match data for any player are monotonically
             increasing in time.
           **kwargs: keyword arguments to pass to the parent `BaseEstimator`
         """
+        print(kwargs)
         super().__init__(**kwargs)
         self.initial_value = initial_value
         self.initial_time = initial_time
@@ -539,12 +538,19 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
 
         if type(X) is pd.DataFrame:
             if self._can_transform_dataframe:
-                x = X[[self.key1_field, self.key2_field, self.timestamp_field]].copy()
+                x = X[
+                    [
+                        self.key1_field,
+                        self.key2_field,
+                        self.timestamp_field,
+                        self.rating_period_field,
+                    ]
+                ].copy()
             else:
                 logger.warning(
                     f"Attempting to transform a dataframe without attributes [key1_field, key2_field, timestamp_field]; using columns [0, 1, 2]"
                 )
-                x = X.iloc[:, :3]
+                x = X.iloc[:, :4]
         else:
             x = pd.DataFrame(X, columns=[key1, key2, ts])
 
@@ -556,7 +562,7 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
         min_time = x[ts].min()
         time_dtype = type(min_time)
         initial_time = None
-        attempt_init_times = [-np.inf, 0, min_time]
+        attempt_init_times = [min_time, -np.inf, 0]
         for val in attempt_init_times:
             try:
                 initial_time = initial_time or time_dtype(val)
@@ -567,6 +573,7 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
                 "Could not create an initial timestamp to use for ratings during fit. "
                 "Please verify the dtype of the column."
             )
+        self.initial_time = initial_time
 
         if not self._fit or not self.incremental_fit:
             # Create a new underlying ratings model if fit() has not been called,
@@ -592,7 +599,9 @@ class RatingEstimator(BaseEstimator, ClassifierMixin):
             intervals_complete = 1
             taken = 0
             for _, period in sorted(periods):
-                self.rating_model.update(period.winner, period.loser, period[ts].max())
+                self.rating_model.update(
+                    period.winner, period.loser, period[ts].max(), True
+                )
                 taken += 1
                 if taken >= report_interval:
                     logger.debug(f"Completed {intervals_complete}/10 fit intervals")
